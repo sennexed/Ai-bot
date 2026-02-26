@@ -14,9 +14,7 @@ async def init_db():
             guild_id BIGINT PRIMARY KEY,
             log_channel BIGINT,
             ai_enabled BOOLEAN DEFAULT TRUE,
-            ai_strictness INTEGER DEFAULT 1,
-            raid_mode BOOLEAN DEFAULT FALSE,
-            lockdown BOOLEAN DEFAULT FALSE
+            ai_strictness INTEGER DEFAULT 2
         );
         """)
 
@@ -32,8 +30,6 @@ async def init_db():
         );
         """)
 
-# ---------------- SETTINGS ----------------
-
 async def ensure_guild(guild_id):
     async with pool.acquire() as conn:
         await conn.execute("""
@@ -46,9 +42,7 @@ async def set_log_channel(guild_id, channel_id):
     await ensure_guild(guild_id)
     async with pool.acquire() as conn:
         await conn.execute("""
-        UPDATE guild_settings
-        SET log_channel=$1
-        WHERE guild_id=$2;
+        UPDATE guild_settings SET log_channel=$1 WHERE guild_id=$2;
         """, channel_id, guild_id)
 
 async def toggle_ai(guild_id):
@@ -62,42 +56,16 @@ async def toggle_ai(guild_id):
         """, guild_id)
         return row["ai_enabled"]
 
-async def toggle_raid(guild_id):
+async def set_strictness(guild_id, level):
     await ensure_guild(guild_id)
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("""
-        UPDATE guild_settings
-        SET raid_mode = NOT raid_mode
-        WHERE guild_id=$1
-        RETURNING raid_mode;
-        """, guild_id)
-        return row["raid_mode"]
-
-async def toggle_lockdown(guild_id):
-    await ensure_guild(guild_id)
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("""
-        UPDATE guild_settings
-        SET lockdown = NOT lockdown
-        WHERE guild_id=$1
-        RETURNING lockdown;
-        """, guild_id)
-        return row["lockdown"]
-
-# ---------------- INFRACTIONS ----------------
+        await conn.execute("""
+        UPDATE guild_settings SET ai_strictness=$1 WHERE guild_id=$2;
+        """, level, guild_id)
 
 async def add_infraction(guild_id, user_id, moderator_id, action, reason):
     async with pool.acquire() as conn:
         await conn.execute("""
-        INSERT INTO infractions (guild_id, user_id, moderator_id, action, reason)
+        INSERT INTO infractions (guild_id,user_id,moderator_id,action,reason)
         VALUES ($1,$2,$3,$4,$5);
         """, guild_id, user_id, moderator_id, action, reason)
-
-async def get_user_logs(guild_id, user_id):
-    async with pool.acquire() as conn:
-        return await conn.fetch("""
-        SELECT * FROM infractions
-        WHERE guild_id=$1 AND user_id=$2
-        ORDER BY created_at DESC
-        LIMIT 10;
-        """, guild_id, user_id)
