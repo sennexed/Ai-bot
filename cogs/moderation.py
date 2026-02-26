@@ -2,94 +2,216 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from datetime import timedelta
-from core.database import add_infraction, get_infractions, count_warnings
+from core.database import (
+    add_infraction,
+    get_guild_settings,
+    save_guild_settings,
+    toggle_ai,
+    set_ai_strictness
+)
+from utils.ai import moderate
+
+# ================= PANEL VIEW =================
+
+class AIPanel(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.manage_messages:
+            await interaction.response.send_message("No permission.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Warn", style=discord.ButtonStyle.primary)
+    async def warn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Reply with @user to warn.", ephemeral=True)
+
+    @discord.ui.button(label="Lockdown", style=discord.ButtonStyle.secondary)
+    async def lockdown(self, interaction: discord.Interaction, button: discord.ui.Button):
+        overwrite = interaction.channel.overwrites_for(interaction.guild.default_role)
+        overwrite.send_messages = False
+        await interaction.channel.set_permissions(interaction.guild.default_role, overwrite=overwrite)
+        await interaction.response.send_message("Channel locked.", ephemeral=True)
+
+    @discord.ui.button(label="Toggle AI", style=discord.ButtonStyle.success)
+    async def toggle_ai_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        settings = await get_guild_settings(interaction.guild.id)
+        new_state = 0 if settings[2] == 1 else 1
+        await toggle_ai(interaction.guild.id, new_state)
+        await interaction.response.send_message(f"AI Enabled: {bool(new_state)}", ephemeral=True)
+
+    @discord.ui.button(label="AI Strictness", style=discord.ButtonStyle.secondary)
+    async def strictness(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await set_ai_strictness(interaction.guild.id, "high")
+        await interaction.response.send_message("AI strictness set to HIGH.", ephemeral=True)
+
+# ================= COG =================
 
 class Moderation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # ---------------------------
-    # BASIC ACTIONS
-    # ---------------------------
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        if message.author.bot:
+            return
 
-    @app_commands.command(name="warn")
-    async def warn(self, interaction: discord.Interaction, user: discord.Member, reason: str = "No reason"):
-        await add_infraction(interaction.guild.id, user.id, interaction.user.id, "warn", reason)
-        warns = await count_warnings(interaction.guild.id, user.id)
+        settings = await get_guild_settings(message.guild.id)
+        if not settings:
+            return
 
-        if warns >= 3:
-            await user.timeout(discord.utils.utcnow() + timedelta(hours=1))
-            await add_infraction(interaction.guild.id, user.id, interaction.user.id, "auto-timeout", "3 warnings", 3600)
+        ai_enabled = settings[2]
+        strictness = settings[3]
 
-        await interaction.response.send_message(f"{user.mention} warned. Total warnings: {warns}")
+        if ai_enabled != 1:
+            return
 
-    @app_commands.command(name="timeout")
-    async def timeout(self, interaction: discord.Interaction, user: discord.Member, seconds: int, reason: str = "No reason"):
-        await user.timeout(discord.utils.utcnow() + timedelta(seconds=seconds))
-        await add_infraction(interaction.guild.id, user.id, interaction.user.id, "timeout", reason, seconds)
-        await interaction.response.send_message("User timed out.")
+        result = await moderate(message.content, strictness)
 
-    @app_commands.command(name="kick")
-    async def kick(self, interaction: discord.Interaction, user: discord.Member, reason: str = "No reason"):
-        await user.kick(reason=reason)
-        await add_infraction(interaction.guild.id, user.id, interaction.user.id, "kick", reason)
-        await interaction.response.send_message("User kicked.")
+        if result.startswith("DELETE"):
+            await message.delete()
+            await add_infraction(message.guild.id, message.author.id, 0, "ai-delete", "AI flagged message")
 
-    @app_commands.command(name="ban")
-    async def ban(self, interaction: discord.Interaction, user: discord.Member, reason: str = "No reason"):
-        await user.ban(reason=reason)
-        await add_infraction(interaction.guild.id, user.id, interaction.user.id, "ban", reason)
-        await interaction.response.send_message("User banned.")
+    @app_commands.command(name="setup", description="Configure bot channels (one-time).")
+    async def setup(self, interaction: discord.Interaction,
+                    log_channel: discord.TextChannel,
+                    panel_channel: discord.TextChannel):
 
-    @app_commands.command(name="unban")
-    async def unban(self, interaction: discord.Interaction, user_id: str):
-        user = await self.bot.fetch_user(int(user_id))
-        await interaction.guild.unban(user)
-        await interaction.response.send_message("User unbanned.")
+        existing = await get_guild_settings(interaction.guild.id)
+        if existing:
+            return await interaction.response.send_message("Already configured.", ephemeral=True)
 
-    # ---------------------------
-    # INFO
-    # ---------------------------
+        await save_guild_settings(interaction.guild.id, log_channel.id, panel_channel.id)
+        await interaction.response.send_message("Setup complete.", ephemeral=True)
 
-    @app_commands.command(name="infractions")
-    async def infractions(self, interaction: discord.Interaction, user: discord.Member):
-        records = await get_infractions(interaction.guild.id, user.id)
-        if not records:
-            return await interaction.response.send_message("No infractions.")
+    @app_commands.command(name="panel", description="Open moderation + AI control panel.")
+    async def panel(self, interaction: discord.Interaction):
 
-        text = "\n".join([f"{r[0]} | {r[1]}" for r in records[:10]])
-        await interaction.response.send_message(text)
+        settings = await get_guild_settings(interaction.guild.id)
+        if not settings:
+            return await interaction.response.send_message("Run /setup first.", ephemeral=True)
 
-    @app_commands.command(name="clearinfractions")
-    async def clearinfractions(self, interaction: discord.Interaction, user: discord.Member):
-        await interaction.response.send_message("Manual clearing not implemented yet.")
+        if interaction.channel.id != int(settings[1]):
+            return await interaction.response.send_message("Use this in the configured panel channel.", ephemeral=True)
 
-    # ---------------------------
-    # CLEANUP
-    # ---------------------------
+        embed = discord.Embed(
+            title="Moderation Control Panel",
+            description="Manage server and AI settings below.",
+            color=discord.Color.red()
+        )
 
-    @app_commands.command(name="purge")
-    async def purge(self, interaction: discord.Interaction, amount: int):
-        await interaction.channel.purge(limit=amount)
-        await interaction.response.send_message(f"Deleted {amount} messages.", ephemeral=True)
+        await interaction.response.send_message(embed=embed, view=AIPanel(self.bot))
 
-    @app_commands.command(name="slowmode")
-    async def slowmode(self, interaction: discord.Interaction, seconds: int):
-        await interaction.channel.edit(slowmode_delay=seconds)
-        await interaction.response.send_message("Slowmode updated.")
+async def setup(bot):
+    await bot.add_cog(Moderation(bot))
+EOFcat << 'EOF' > cogs/moderation.py
+import discord
+from discord.ext import commands
+from discord import app_commands
+from datetime import timedelta
+from core.database import (
+    add_infraction,
+    get_guild_settings,
+    save_guild_settings,
+    toggle_ai,
+    set_ai_strictness
+)
+from utils.ai import moderate
 
-    # ---------------------------
-    # WHOIS
-    # ---------------------------
+# ================= PANEL VIEW =================
 
-    @app_commands.command(name="whois")
-    async def whois(self, interaction: discord.Interaction, user: discord.Member):
-        embed = discord.Embed(title="User Info")
-        embed.add_field(name="ID", value=user.id)
-        embed.add_field(name="Joined", value=user.joined_at)
-        embed.add_field(name="Created", value=user.created_at)
-        embed.add_field(name="Roles", value=", ".join([r.name for r in user.roles]))
-        await interaction.response.send_message(embed=embed)
+class AIPanel(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.manage_messages:
+            await interaction.response.send_message("No permission.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Warn", style=discord.ButtonStyle.primary)
+    async def warn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Reply with @user to warn.", ephemeral=True)
+
+    @discord.ui.button(label="Lockdown", style=discord.ButtonStyle.secondary)
+    async def lockdown(self, interaction: discord.Interaction, button: discord.ui.Button):
+        overwrite = interaction.channel.overwrites_for(interaction.guild.default_role)
+        overwrite.send_messages = False
+        await interaction.channel.set_permissions(interaction.guild.default_role, overwrite=overwrite)
+        await interaction.response.send_message("Channel locked.", ephemeral=True)
+
+    @discord.ui.button(label="Toggle AI", style=discord.ButtonStyle.success)
+    async def toggle_ai_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        settings = await get_guild_settings(interaction.guild.id)
+        new_state = 0 if settings[2] == 1 else 1
+        await toggle_ai(interaction.guild.id, new_state)
+        await interaction.response.send_message(f"AI Enabled: {bool(new_state)}", ephemeral=True)
+
+    @discord.ui.button(label="AI Strictness", style=discord.ButtonStyle.secondary)
+    async def strictness(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await set_ai_strictness(interaction.guild.id, "high")
+        await interaction.response.send_message("AI strictness set to HIGH.", ephemeral=True)
+
+# ================= COG =================
+
+class Moderation(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        if message.author.bot:
+            return
+
+        settings = await get_guild_settings(message.guild.id)
+        if not settings:
+            return
+
+        ai_enabled = settings[2]
+        strictness = settings[3]
+
+        if ai_enabled != 1:
+            return
+
+        result = await moderate(message.content, strictness)
+
+        if result.startswith("DELETE"):
+            await message.delete()
+            await add_infraction(message.guild.id, message.author.id, 0, "ai-delete", "AI flagged message")
+
+    @app_commands.command(name="setup", description="Configure bot channels (one-time).")
+    async def setup(self, interaction: discord.Interaction,
+                    log_channel: discord.TextChannel,
+                    panel_channel: discord.TextChannel):
+
+        existing = await get_guild_settings(interaction.guild.id)
+        if existing:
+            return await interaction.response.send_message("Already configured.", ephemeral=True)
+
+        await save_guild_settings(interaction.guild.id, log_channel.id, panel_channel.id)
+        await interaction.response.send_message("Setup complete.", ephemeral=True)
+
+    @app_commands.command(name="panel", description="Open moderation + AI control panel.")
+    async def panel(self, interaction: discord.Interaction):
+
+        settings = await get_guild_settings(interaction.guild.id)
+        if not settings:
+            return await interaction.response.send_message("Run /setup first.", ephemeral=True)
+
+        if interaction.channel.id != int(settings[1]):
+            return await interaction.response.send_message("Use this in the configured panel channel.", ephemeral=True)
+
+        embed = discord.Embed(
+            title="Moderation Control Panel",
+            description="Manage server and AI settings below.",
+            color=discord.Color.red()
+        )
+
+        await interaction.response.send_message(embed=embed, view=AIPanel(self.bot))
 
 async def setup(bot):
     await bot.add_cog(Moderation(bot))
