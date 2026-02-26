@@ -3,9 +3,20 @@ import asyncpg
 
 pool = None
 
+
 async def init_db():
     global pool
-    pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"))
+
+    database_url = os.getenv("DATABASE_URL")
+
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is not set in environment variables.")
+
+    pool = await asyncpg.create_pool(
+        database_url,
+        min_size=1,
+        max_size=5
+    )
 
     async with pool.acquire() as conn:
         await conn.execute("""
@@ -55,6 +66,7 @@ async def get_user_reputation(guild_id, user_id):
         SELECT reputation FROM users
         WHERE guild_id=$1 AND user_id=$2;
         """, guild_id, user_id)
+
         return row["reputation"] if row else 0
 
 
@@ -64,7 +76,7 @@ async def set_user_reputation(guild_id, user_id, value):
         INSERT INTO users (guild_id, user_id, reputation)
         VALUES ($1,$2,$3)
         ON CONFLICT (guild_id, user_id)
-        DO UPDATE SET reputation=$3;
+        DO UPDATE SET reputation = EXCLUDED.reputation;
         """, guild_id, user_id, value)
 
 
@@ -75,3 +87,4 @@ async def get_user_infractions(guild_id, user_id):
         WHERE guild_id=$1 AND user_id=$2
         ORDER BY created_at DESC;
         """, guild_id, user_id)
+EO
