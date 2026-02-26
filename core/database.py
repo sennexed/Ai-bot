@@ -2,13 +2,11 @@ import aiosqlite
 import os
 
 DB_PATH = "data/database.db"
-
 os.makedirs("data", exist_ok=True)
 
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-
         await db.execute("""
         CREATE TABLE IF NOT EXISTS guild_settings (
             guild_id INTEGER PRIMARY KEY,
@@ -33,12 +31,10 @@ async def init_db():
         await db.commit()
 
 
-# ===== Guild Settings =====
-
 async def save_guild_settings(guild_id, log_channel):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-        INSERT INTO guild_settings (guild_id, log_channel)
+        INSERT OR REPLACE INTO guild_settings (guild_id, log_channel)
         VALUES (?, ?)
         """, (guild_id, log_channel))
         await db.commit()
@@ -70,8 +66,6 @@ async def set_ai_strictness(guild_id, level):
         """, (level, guild_id))
         await db.commit()
 
-
-# ===== Infractions =====
 
 async def add_infraction(guild_id, user_id, moderator_id, action, reason):
     async with aiosqlite.connect(DB_PATH) as db:
