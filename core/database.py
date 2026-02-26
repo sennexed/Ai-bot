@@ -3,20 +3,14 @@ import asyncpg
 
 pool = None
 
-
 async def init_db():
     global pool
 
     database_url = os.getenv("DATABASE_URL")
-
     if not database_url:
-        raise RuntimeError("DATABASE_URL is not set in environment variables.")
+        raise RuntimeError("DATABASE_URL is not set.")
 
-    pool = await asyncpg.create_pool(
-        database_url,
-        min_size=1,
-        max_size=5
-    )
+    pool = await asyncpg.create_pool(database_url, min_size=1, max_size=5)
 
     async with pool.acquire() as conn:
         await conn.execute("""
@@ -50,7 +44,6 @@ async def init_db():
         );
         """)
 
-
 async def add_infraction(guild_id, user_id, moderator_id, action, reason, severity):
     async with pool.acquire() as conn:
         await conn.execute("""
@@ -59,16 +52,13 @@ async def add_infraction(guild_id, user_id, moderator_id, action, reason, severi
         VALUES ($1,$2,$3,$4,$5,$6);
         """, guild_id, user_id, moderator_id, action, reason, severity)
 
-
 async def get_user_reputation(guild_id, user_id):
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
         SELECT reputation FROM users
         WHERE guild_id=$1 AND user_id=$2;
         """, guild_id, user_id)
-
         return row["reputation"] if row else 0
-
 
 async def set_user_reputation(guild_id, user_id, value):
     async with pool.acquire() as conn:
@@ -79,7 +69,6 @@ async def set_user_reputation(guild_id, user_id, value):
         DO UPDATE SET reputation = EXCLUDED.reputation;
         """, guild_id, user_id, value)
 
-
 async def get_user_infractions(guild_id, user_id):
     async with pool.acquire() as conn:
         return await conn.fetch("""
@@ -87,4 +76,3 @@ async def get_user_infractions(guild_id, user_id):
         WHERE guild_id=$1 AND user_id=$2
         ORDER BY created_at DESC;
         """, guild_id, user_id)
-EO
