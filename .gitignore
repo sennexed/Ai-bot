@@ -1,0 +1,5 @@
+.env
+data/database.json
+__pycache__/
+*.pyc
+
