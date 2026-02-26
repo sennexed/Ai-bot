@@ -1,79 +1,27 @@
 import discord
+import datetime
 from discord.ext import commands
 from discord import app_commands
 from core.database import (
     add_infraction,
     get_user_infractions,
-    get_toxicity,
-    set_log_channel,
-    get_log_channel,
-    toggle_ai
+    add_toxicity,
+    get_toxicity
 )
-
-
-class ModPanel(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Warn", style=discord.ButtonStyle.primary, custom_id="panel_warn")
-    async def warn_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Use /warn command.", ephemeral=True)
-
-    @discord.ui.button(label="Mute", style=discord.ButtonStyle.secondary, custom_id="panel_mute")
-    async def mute_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Use /mute command.", ephemeral=True)
-
-    @discord.ui.button(label="Ban", style=discord.ButtonStyle.danger, custom_id="panel_ban")
-    async def ban_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Use /ban command.", ephemeral=True)
-
-    @discord.ui.button(label="Infractions", style=discord.ButtonStyle.success, custom_id="panel_infractions")
-    async def inf_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Use /infractions command.", ephemeral=True)
-
-    @discord.ui.button(label="Toggle AI", style=discord.ButtonStyle.secondary, custom_id="panel_ai")
-    async def ai_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        new_state = await toggle_ai(interaction.guild.id)
-        await interaction.response.send_message(f"AI Enabled: {new_state}", ephemeral=True)
 
 
 class Moderation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        bot.add_view(ModPanel())
 
 
-    # ---------------- SETUP ----------------
-    @app_commands.command(name="setup", description="Setup moderation log channel")
-    async def setup(self, interaction: discord.Interaction, channel: discord.TextChannel):
-
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Admin only.", ephemeral=True)
-            return
-
-        await set_log_channel(interaction.guild.id, channel.id)
-
-        await interaction.response.send_message(
-            f"Log channel set to {channel.mention}"
-        )
-
-
-    # ---------------- PANEL ----------------
-    @app_commands.command(name="panel", description="Open moderation panel")
-    async def panel(self, interaction: discord.Interaction):
-
-        embed = discord.Embed(
-            title="Moderation Control Panel",
-            description="Use buttons below.",
-            color=discord.Color.blurple()
-        )
-
-        await interaction.response.send_message(embed=embed, view=ModPanel())
-
-
-    # ---------------- WARN ----------------
-    @app_commands.command(name="warn", description="Warn user")
+    # ---------- WARN ----------
+    @app_commands.command(name="warn", description="Warn a user")
     async def warn(self, interaction: discord.Interaction, member: discord.Member, reason: str):
+
+        if not interaction.user.guild_permissions.moderate_members:
+            await interaction.response.send_message("Missing permission.", ephemeral=True)
+            return
 
         await add_infraction(
             interaction.guild.id,
@@ -84,29 +32,64 @@ class Moderation(commands.Cog):
             10
         )
 
+        try:
+            await member.send(
+                f"You were warned in {interaction.guild.name}\nReason: {reason}"
+            )
+        except:
+            pass
+
         await interaction.response.send_message(f"{member.mention} warned.")
 
 
-    # ---------------- MUTE ----------------
-    @app_commands.command(name="mute", description="Timeout user")
+    # ---------- MUTE ----------
+    @app_commands.command(name="mute", description="Timeout a user")
     async def mute(self, interaction: discord.Interaction, member: discord.Member, minutes: int):
 
-        until = discord.utils.utcnow() + discord.timedelta(minutes=minutes)
-        await member.timeout(until)
+        if not interaction.user.guild_permissions.moderate_members:
+            await interaction.response.send_message("Missing permission.", ephemeral=True)
+            return
 
-        await interaction.response.send_message(f"{member.mention} muted.")
+        until = discord.utils.utcnow() + datetime.timedelta(minutes=minutes)
+
+        try:
+            await member.timeout(until)
+        except Exception as e:
+            await interaction.response.send_message(f"Failed: {e}", ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            f"{member.mention} muted for {minutes} minutes."
+        )
 
 
-    # ---------------- BAN ----------------
-    @app_commands.command(name="ban", description="Ban user")
-    async def ban(self, interaction: discord.Interaction, member: discord.Member):
+    # ---------- BAN ----------
+    @app_commands.command(name="ban", description="Ban a user")
+    async def ban(self, interaction: discord.Interaction, member: discord.Member, reason: str):
 
-        await member.ban()
+        if not interaction.user.guild_permissions.ban_members:
+            await interaction.response.send_message("Missing permission.", ephemeral=True)
+            return
+
+        try:
+            await member.ban(reason=reason)
+        except Exception as e:
+            await interaction.response.send_message(f"Failed: {e}", ephemeral=True)
+            return
+
+        await add_infraction(
+            interaction.guild.id,
+            member.id,
+            interaction.user.id,
+            "ban",
+            reason,
+            50
+        )
 
         await interaction.response.send_message(f"{member.mention} banned.")
 
 
-    # ---------------- INFRACTIONS ----------------
+    # ---------- INFRACTIONS ----------
     @app_commands.command(name="infractions", description="View infractions")
     async def infractions(self, interaction: discord.Interaction, member: discord.Member):
 
@@ -119,19 +102,26 @@ class Moderation(commands.Cog):
             await interaction.response.send_message("No infractions.")
             return
 
-        text = ""
+        desc = ""
         for r in rows[:10]:
-            text += f"{r['action']} | {r['reason']}\n"
+            desc += f"{r['action']} | {r['reason']} | Severity {r['severity']}\n"
 
-        await interaction.response.send_message(text)
+        embed = discord.Embed(
+            title=f"{member.name}'s Infractions",
+            description=desc,
+            color=discord.Color.red()
+        )
+
+        await interaction.response.send_message(embed=embed)
 
 
-    # ---------------- TOXICITY ----------------
-    @app_commands.command(name="toxicity", description="Check toxicity")
+    # ---------- TOXICITY ----------
+    @app_commands.command(name="toxicity", description="Check toxicity score")
     async def toxicity(self, interaction: discord.Interaction, member: discord.Member):
 
         score = await get_toxicity(interaction.guild.id, member.id)
-        await interaction.response.send_message(f"Toxicity: {score}")
+
+        await interaction.response.send_message(f"Toxicity score: {score}")
 
 
 async def setup(bot):
