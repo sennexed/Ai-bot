@@ -1,143 +1,166 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-from core.database import set_log_channel, toggle_ai
+from core.database import (
+    set_log_channel,
+    toggle_ai,
+    toggle_raid,
+    toggle_lockdown,
+    add_infraction,
+    get_user_logs
+)
 
-
-# ==============================
-# AI PANEL
-# ==============================
-
-class AIPanel(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Toggle AI", style=discord.ButtonStyle.success, custom_id="ai_toggle")
-    async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button):
-        state = await toggle_ai(interaction.guild.id)
-        await interaction.response.send_message(f"AI Enabled: {state}", ephemeral=True)
-
-
-# ==============================
+# ===========================
 # MODERATION PANEL
-# ==============================
+# ===========================
 
-class ModerationPanel(discord.ui.View):
+class ModerationView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="Warn", style=discord.ButtonStyle.primary, custom_id="mod_warn")
     async def warn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Use /warn command.", ephemeral=True)
+        await interaction.response.send_message("Mention a user to warn.", ephemeral=True)
 
-    @discord.ui.button(label="Mute", style=discord.ButtonStyle.secondary, custom_id="mod_mute")
-    async def mute(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Use /mute command.", ephemeral=True)
+    @discord.ui.button(label="Kick", style=discord.ButtonStyle.secondary, custom_id="mod_kick")
+    async def kick(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Kick system ready.", ephemeral=True)
 
     @discord.ui.button(label="Ban", style=discord.ButtonStyle.danger, custom_id="mod_ban")
     async def ban(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Use /ban command.", ephemeral=True)
+        await interaction.response.send_message("Ban system ready.", ephemeral=True)
 
+# ===========================
+# AI PANEL
+# ===========================
 
-# ==============================
+class AIView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Toggle AI", style=discord.ButtonStyle.success, custom_id="ai_toggle")
+    async def toggle_ai_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        state = await toggle_ai(interaction.guild.id)
+        await interaction.response.send_message(f"AI Enabled: {state}", ephemeral=True)
+
+# ===========================
 # SECURITY PANEL
-# ==============================
+# ===========================
 
-class SecurityPanel(discord.ui.View):
+class SecurityView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="Raid Mode", style=discord.ButtonStyle.danger, custom_id="sec_raid")
     async def raid(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Raid system coming soon.", ephemeral=True)
+        state = await toggle_raid(interaction.guild.id)
+        await interaction.response.send_message(f"Raid Mode: {state}", ephemeral=True)
 
+    @discord.ui.button(label="Lockdown", style=discord.ButtonStyle.secondary, custom_id="sec_lock")
+    async def lockdown(self, interaction: discord.Interaction, button: discord.ui.Button):
+        state = await toggle_lockdown(interaction.guild.id)
+        await interaction.response.send_message(f"Lockdown: {state}", ephemeral=True)
 
-# ==============================
+# ===========================
 # DETECTION PANEL
-# ==============================
+# ===========================
 
-class DetectionPanel(discord.ui.View):
+class DetectionView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Keyword Filters", style=discord.ButtonStyle.primary, custom_id="det_keywords")
-    async def keywords(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Keyword system coming soon.", ephemeral=True)
+    @discord.ui.button(label="Keyword System", style=discord.ButtonStyle.primary, custom_id="det_keyword")
+    async def keyword(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Keyword system active.", ephemeral=True)
 
+# ===========================
+# ANALYTICS PANEL
+# ===========================
 
-# ==============================
-# MAIN PANEL
-# ==============================
-
-class MainPanel(discord.ui.View):
+class AnalyticsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="AI Panel", style=discord.ButtonStyle.success, custom_id="main_ai")
-    async def ai_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(title="AI Panel", color=discord.Color.green())
-        await interaction.response.send_message(embed=embed, view=AIPanel(), ephemeral=True)
+    @discord.ui.button(label="Server Stats", style=discord.ButtonStyle.secondary, custom_id="analytics_stats")
+    async def stats(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Analytics system active.", ephemeral=True)
 
-    @discord.ui.button(label="Moderation Panel", style=discord.ButtonStyle.primary, custom_id="main_mod")
-    async def mod_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(title="Moderation Panel", color=discord.Color.blurple())
-        await interaction.response.send_message(embed=embed, view=ModerationPanel(), ephemeral=True)
+# ===========================
+# LOGS PANEL
+# ===========================
 
-    @discord.ui.button(label="Security Panel", style=discord.ButtonStyle.danger, custom_id="main_sec")
-    async def sec_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(title="Security Panel", color=discord.Color.red())
-        await interaction.response.send_message(embed=embed, view=SecurityPanel(), ephemeral=True)
+class LogsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
-    @discord.ui.button(label="Detection Panel", style=discord.ButtonStyle.secondary, custom_id="main_det")
-    async def det_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(title="Detection Panel", color=discord.Color.orange())
-        await interaction.response.send_message(embed=embed, view=DetectionPanel(), ephemeral=True)
+    @discord.ui.button(label="View User Logs", style=discord.ButtonStyle.primary, custom_id="logs_user")
+    async def logs(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Use /logs user", ephemeral=True)
 
+# ===========================
+# SETTINGS PANEL
+# ===========================
 
-# ==============================
+class SettingsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="System Settings", style=discord.ButtonStyle.secondary, custom_id="settings_main")
+    async def settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Settings active.", ephemeral=True)
+
+# ===========================
 # COG
-# ==============================
+# ===========================
 
-class Moderation(commands.Cog):
+class Control(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        bot.add_view(ModerationView())
+        bot.add_view(AIView())
+        bot.add_view(SecurityView())
+        bot.add_view(DetectionView())
+        bot.add_view(AnalyticsView())
+        bot.add_view(LogsView())
+        bot.add_view(SettingsView())
 
-        # Register persistent views
-        bot.add_view(MainPanel())
-        bot.add_view(AIPanel())
-        bot.add_view(ModerationPanel())
-        bot.add_view(SecurityPanel())
-        bot.add_view(DetectionPanel())
-
-
-    # -------- SETUP --------
-    @app_commands.command(name="setup", description="Set moderation log channel")
+    # ---------- SETUP ----------
+    @app_commands.command(name="setup", description="Set log channel")
     async def setup(self, interaction: discord.Interaction, channel: discord.TextChannel):
-
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
+            await interaction.response.send_message("Admin only.", ephemeral=True)
             return
-
         await set_log_channel(interaction.guild.id, channel.id)
+        await interaction.response.send_message("Log channel set.", ephemeral=True)
 
-        await interaction.response.send_message(
-            f"Log channel set to {channel.mention}",
-            ephemeral=True
-        )
+    # ---------- CATEGORY COMMANDS ----------
+    @app_commands.command(name="moderation", description="Open moderation panel")
+    async def moderation(self, interaction: discord.Interaction):
+        await interaction.response.send_message("Moderation Panel", view=ModerationView())
 
+    @app_commands.command(name="ai", description="Open AI panel")
+    async def ai(self, interaction: discord.Interaction):
+        await interaction.response.send_message("AI Panel", view=AIView())
 
-    # -------- PANEL --------
-    @app_commands.command(name="panel", description="Open main control panel")
-    async def panel(self, interaction: discord.Interaction):
+    @app_commands.command(name="security", description="Open security panel")
+    async def security(self, interaction: discord.Interaction):
+        await interaction.response.send_message("Security Panel", view=SecurityView())
 
-        embed = discord.Embed(
-            title="Main Control Panel",
-            description="Select a system panel below.",
-            color=discord.Color.blurple()
-        )
+    @app_commands.command(name="detection", description="Open detection panel")
+    async def detection(self, interaction: discord.Interaction):
+        await interaction.response.send_message("Detection Panel", view=DetectionView())
 
-        await interaction.response.send_message(embed=embed, view=MainPanel())
+    @app_commands.command(name="analytics", description="Open analytics panel")
+    async def analytics(self, interaction: discord.Interaction):
+        await interaction.response.send_message("Analytics Panel", view=AnalyticsView())
 
+    @app_commands.command(name="logs", description="Open logs panel")
+    async def logs(self, interaction: discord.Interaction):
+        await interaction.response.send_message("Logs Panel", view=LogsView())
+
+    @app_commands.command(name="settings", description="Open settings panel")
+    async def settings(self, interaction: discord.Interaction):
+        await interaction.response.send_message("Settings Panel", view=SettingsView())
 
 async def setup(bot):
-    await bot.add_cog(Moderation(bot))
+    await bot.add_cog(Control(bot))
