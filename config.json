@@ -1,4 +1,10 @@
 {
   "automod": true,
-  "max_warnings": 3
+  "max_warnings": 3,
+  "log_channel": null,
+  "regex_blacklist": [
+    "(?i)free\\s*nitro",
+    "(?i)discord\\.gg\\/\\w+",
+    "(?i)http[s]?:\\/\\/"
+  ]
 }
