@@ -3,31 +3,27 @@ import asyncpg
 
 pool = None
 
+
+# ----------------------------
+# INIT DATABASE
+# ----------------------------
 async def init_db():
     global pool
 
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
-        raise RuntimeError("DATABASE_URL is not set.")
+        raise RuntimeError("DATABASE_URL not set")
 
     pool = await asyncpg.create_pool(database_url, min_size=1, max_size=5)
 
     async with pool.acquire() as conn:
+
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS guild_settings (
             guild_id BIGINT PRIMARY KEY,
             log_channel BIGINT,
             ai_enabled BOOLEAN DEFAULT TRUE,
             ai_strictness INTEGER DEFAULT 1
-        );
-        """)
-
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            guild_id BIGINT,
-            user_id BIGINT,
-            reputation INTEGER DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id)
         );
         """)
 
@@ -39,12 +35,42 @@ async def init_db():
             moderator_id BIGINT,
             action TEXT,
             reason TEXT,
-            severity INTEGER,
+            severity INTEGER DEFAULT 1,
             created_at TIMESTAMP DEFAULT NOW()
         );
         """)
 
-async def add_infraction(guild_id, user_id, moderator_id, action, reason, severity):
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS message_history (
+            guild_id BIGINT,
+            user_id BIGINT,
+            content TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+        """)
+
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS toxicity_scores (
+            guild_id BIGINT,
+            user_id BIGINT,
+            score INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        """)
+
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS join_logs (
+            guild_id BIGINT,
+            user_id BIGINT,
+            joined_at TIMESTAMP DEFAULT NOW()
+        );
+        """)
+
+
+# ----------------------------
+# INFRACTIONS
+# ----------------------------
+async def add_infraction(guild_id, user_id, moderator_id, action, reason, severity=1):
     async with pool.acquire() as conn:
         await conn.execute("""
         INSERT INTO infractions
@@ -52,22 +78,6 @@ async def add_infraction(guild_id, user_id, moderator_id, action, reason, severi
         VALUES ($1,$2,$3,$4,$5,$6);
         """, guild_id, user_id, moderator_id, action, reason, severity)
 
-async def get_user_reputation(guild_id, user_id):
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("""
-        SELECT reputation FROM users
-        WHERE guild_id=$1 AND user_id=$2;
-        """, guild_id, user_id)
-        return row["reputation"] if row else 0
-
-async def set_user_reputation(guild_id, user_id, value):
-    async with pool.acquire() as conn:
-        await conn.execute("""
-        INSERT INTO users (guild_id, user_id, reputation)
-        VALUES ($1,$2,$3)
-        ON CONFLICT (guild_id, user_id)
-        DO UPDATE SET reputation = EXCLUDED.reputation;
-        """, guild_id, user_id, value)
 
 async def get_user_infractions(guild_id, user_id):
     async with pool.acquire() as conn:
@@ -75,4 +85,58 @@ async def get_user_infractions(guild_id, user_id):
         SELECT * FROM infractions
         WHERE guild_id=$1 AND user_id=$2
         ORDER BY created_at DESC;
+        """, guild_id, user_id)
+
+
+# ----------------------------
+# MESSAGE MEMORY
+# ----------------------------
+async def store_message(guild_id, user_id, content):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+        INSERT INTO message_history (guild_id, user_id, content)
+        VALUES ($1,$2,$3);
+        """, guild_id, user_id, content)
+
+
+async def get_recent_messages(guild_id, user_id, limit=5):
+    async with pool.acquire() as conn:
+        return await conn.fetch("""
+        SELECT content FROM message_history
+        WHERE guild_id=$1 AND user_id=$2
+        ORDER BY created_at DESC
+        LIMIT $3;
+        """, guild_id, user_id, limit)
+
+
+# ----------------------------
+# TOXICITY SYSTEM
+# ----------------------------
+async def add_toxicity(guild_id, user_id, amount):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+        INSERT INTO toxicity_scores (guild_id, user_id, score)
+        VALUES ($1,$2,$3)
+        ON CONFLICT (guild_id, user_id)
+        DO UPDATE SET score = toxicity_scores.score + $3;
+        """, guild_id, user_id, amount)
+
+
+async def get_toxicity(guild_id, user_id):
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+        SELECT score FROM toxicity_scores
+        WHERE guild_id=$1 AND user_id=$2;
+        """, guild_id, user_id)
+        return row["score"] if row else 0
+
+
+# ----------------------------
+# JOIN TRACKING
+# ----------------------------
+async def log_join(guild_id, user_id):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+        INSERT INTO join_logs (guild_id, user_id)
+        VALUES ($1,$2);
         """, guild_id, user_id)

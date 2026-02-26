@@ -1,109 +1,144 @@
 import discord
-import json
-from datetime import timedelta
+import re
+import datetime
 from discord.ext import commands
-from utils.basic_filters import *
-from utils.reputation import *
-from utils.ai import moderate
+from discord import app_commands
+
 from core.database import (
     add_infraction,
-    get_user_reputation,
-    set_user_reputation,
-    get_user_infractions
+    get_user_infractions,
+    store_message,
+    add_toxicity,
+    get_toxicity,
+    log_join
 )
+
 
 class Moderation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        if message.author.bot or not message.guild:
+
+    # ---------------- SLASH COMMANDS ----------------
+
+    @app_commands.command(name="warn", description="Warn a user")
+    async def warn(self, interaction: discord.Interaction, member: discord.Member, reason: str):
+
+        if not interaction.user.guild_permissions.moderate_members:
+            await interaction.response.send_message("No permission.", ephemeral=True)
             return
 
-        # ===== BASIC FILTER LAYER =====
-
-        if is_spam(message.author.id):
-            await message.delete()
-            return
-
-        if excessive_mentions(message):
-            await message.delete()
-            return
-
-        if repeated_text(message.content):
-            await message.delete()
-            return
-
-        if character_flood(message.content):
-            await message.delete()
-            return
-
-        if contains_blacklisted_link(message.content):
-            await message.delete()
-            return
-
-        # ===== AI LAYER =====
+        await add_infraction(
+            interaction.guild.id,
+            member.id,
+            interaction.user.id,
+            "warn",
+            reason,
+            10
+        )
 
         try:
-            ai_response = await moderate(message.content, 1)
-
-            # Expecting AI to return valid JSON
-            data = json.loads(ai_response)
-
-            severity = data.get("toxicity", 0)
-            explanation = data.get("explanation", "AI violation detected")
-
-            reputation = await get_user_reputation(
-                message.guild.id,
-                message.author.id
+            await member.send(
+                f"You were warned in {interaction.guild.name}.\nReason: {reason}"
             )
+        except:
+            pass
 
-            infractions = await get_user_infractions(
-                message.guild.id,
-                message.author.id
-            )
+        await interaction.response.send_message(
+            f"{member.mention} has been warned."
+        )
 
-            action = calculate_action(severity, len(infractions))
 
-            if not action:
-                return
+    @app_commands.command(name="infractions", description="View user infractions")
+    async def infractions(self, interaction: discord.Interaction, member: discord.Member):
 
-            # Store infraction
+        rows = await get_user_infractions(
+            interaction.guild.id,
+            member.id
+        )
+
+        if not rows:
+            await interaction.response.send_message("No infractions found.")
+            return
+
+        desc = ""
+        for r in rows[:10]:
+            desc += f"• {r['action']} | {r['reason']} | Severity: {r['severity']}\n"
+
+        embed = discord.Embed(
+            title=f"{member.name}'s Infractions",
+            description=desc,
+            color=discord.Color.red()
+        )
+
+        await interaction.response.send_message(embed=embed)
+
+
+    # ---------------- AUTO MODERATION ----------------
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+
+        if message.author.bot:
+            return
+
+        await store_message(message.guild.id, message.author.id, message.content)
+
+        severity = 0
+
+        if message.content.count("!") > 5:
+            severity += 20
+
+        if len(message.mentions) > 5:
+            severity += 40
+
+        if re.search(r"(?:\w\s){5,}", message.content):
+            severity += 30
+
+        blacklist = ["idiot", "stupid", "kill yourself"]
+        for word in blacklist:
+            if word in message.content.lower():
+                severity += 50
+
+        if severity > 0:
+            await add_toxicity(message.guild.id, message.author.id, severity)
+
+        total = await get_toxicity(message.guild.id, message.author.id)
+
+        if severity >= 70 or total > 150:
+
             await add_infraction(
                 message.guild.id,
                 message.author.id,
-                0,
-                action,
-                explanation,
+                self.bot.user.id,
+                "auto_warn",
+                "Automated toxicity detection",
                 severity
             )
 
-            # Update reputation
-            new_rep = update_reputation(reputation, severity)
-
-            await set_user_reputation(
-                message.guild.id,
-                message.author.id,
-                new_rep
-            )
-
-            # Execute punishment
-            if action == "warn":
-                await message.channel.send(
-                    f"{message.author.mention} has been warned."
+            try:
+                await message.author.send(
+                    f"You triggered moderation in {message.guild.name}.\nSeverity: {severity}"
                 )
+            except:
+                pass
 
-            elif action == "timeout":
-                await message.author.timeout(
-                    discord.utils.utcnow() + timedelta(minutes=10)
-                )
+            await message.delete()
 
-            elif action == "ban":
-                await message.guild.ban(message.author)
+        await self.bot.process_commands(message)
 
-        except Exception:
-            pass
+
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member):
+        await log_join(member.guild.id, member.id)
+
+        account_age = (datetime.datetime.utcnow() - member.created_at).days
+
+        if account_age < 3:
+            try:
+                await member.send("Your account is new. Please follow server rules.")
+            except:
+                pass
 
 
 async def setup(bot):

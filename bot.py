@@ -18,7 +18,6 @@ async def load_cogs():
 @bot.event
 async def on_ready():
     print(f"Bot ready as {bot.user}")
-
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} slash commands.")
