@@ -1,15 +1,18 @@
 import aiosqlite
+import os
 
 DB_PATH = "data/database.db"
+
+os.makedirs("data", exist_ok=True)
 
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS guild_settings (
             guild_id INTEGER PRIMARY KEY,
             log_channel INTEGER,
-            panel_channel INTEGER,
             ai_enabled INTEGER DEFAULT 0,
             ai_strictness TEXT DEFAULT 'medium'
         )
@@ -22,7 +25,8 @@ async def init_db():
             user_id INTEGER,
             moderator_id INTEGER,
             action TEXT,
-            reason TEXT
+            reason TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         """)
 
@@ -31,18 +35,21 @@ async def init_db():
 
 # ===== Guild Settings =====
 
-async def save_guild_settings(guild_id, log_channel, panel_channel):
+async def save_guild_settings(guild_id, log_channel):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-        INSERT INTO guild_settings (guild_id, log_channel, panel_channel)
-        VALUES (?, ?, ?)
-        """, (guild_id, log_channel, panel_channel))
+        INSERT INTO guild_settings (guild_id, log_channel)
+        VALUES (?, ?)
+        """, (guild_id, log_channel))
         await db.commit()
 
 
 async def get_guild_settings(guild_id):
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT * FROM guild_settings WHERE guild_id = ?", (guild_id,)) as cursor:
+        async with db.execute(
+            "SELECT * FROM guild_settings WHERE guild_id = ?",
+            (guild_id,)
+        ) as cursor:
             return await cursor.fetchone()
 
 
@@ -78,7 +85,8 @@ async def add_infraction(guild_id, user_id, moderator_id, action, reason):
 async def get_infractions(guild_id, user_id):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
-        SELECT action, reason FROM infractions
+        SELECT action, reason, timestamp
+        FROM infractions
         WHERE guild_id = ? AND user_id = ?
         ORDER BY id DESC
         """, (guild_id, user_id)) as cursor:
