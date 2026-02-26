@@ -16,7 +16,6 @@ from utils.ai import moderate
 class Moderation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.bot.add_view(ControlPanel(bot))
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -69,13 +68,13 @@ class Moderation(commands.Cog):
 
         await interaction.response.send_message(
             embed=embed,
-            view=ControlPanel(self.bot)
+            view=ControlPanel()
         )
 
 
 class UserSelect(discord.ui.UserSelect):
     def __init__(self):
-        super().__init__(placeholder="Select a user to moderate",
+        super().__init__(placeholder="Select a user",
                          min_values=1,
                          max_values=1)
 
@@ -88,9 +87,8 @@ class UserSelect(discord.ui.UserSelect):
 
 
 class ControlPanel(discord.ui.View):
-    def __init__(self, bot):
-        super().__init__(timeout=None)
-        self.bot = bot
+    def __init__(self):
+        super().__init__(timeout=300)
         self.add_item(UserSelect())
 
     async def interaction_check(self, interaction):
@@ -99,12 +97,12 @@ class ControlPanel(discord.ui.View):
             return False
         return True
 
-    async def get_target(self, interaction):
-        return getattr(self.bot, "selected_user", None)
+    def get_target(self, interaction):
+        return getattr(interaction.client, "selected_user", None)
 
     @discord.ui.button(label="Warn", style=discord.ButtonStyle.primary)
     async def warn_btn(self, interaction, button):
-        target = await self.get_target(interaction)
+        target = self.get_target(interaction)
         if not target:
             await interaction.response.send_message("Select user first.", ephemeral=True)
             return
@@ -118,7 +116,7 @@ class ControlPanel(discord.ui.View):
 
     @discord.ui.button(label="Kick", style=discord.ButtonStyle.danger)
     async def kick_btn(self, interaction, button):
-        target = await self.get_target(interaction)
+        target = self.get_target(interaction)
         if not target:
             await interaction.response.send_message("Select user first.", ephemeral=True)
             return
@@ -136,7 +134,7 @@ class ControlPanel(discord.ui.View):
 
     @discord.ui.button(label="Ban", style=discord.ButtonStyle.danger)
     async def ban_btn(self, interaction, button):
-        target = await self.get_target(interaction)
+        target = self.get_target(interaction)
         if not target:
             await interaction.response.send_message("Select user first.", ephemeral=True)
             return
@@ -154,7 +152,7 @@ class ControlPanel(discord.ui.View):
 
     @discord.ui.button(label="Timeout 10m", style=discord.ButtonStyle.secondary)
     async def timeout_btn(self, interaction, button):
-        target = await self.get_target(interaction)
+        target = self.get_target(interaction)
         if not target:
             await interaction.response.send_message("Select user first.", ephemeral=True)
             return
