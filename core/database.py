@@ -1,87 +1,77 @@
-import aiosqlite
 import os
+import asyncpg
 
-DB_PATH = "data/database.db"
-os.makedirs("data", exist_ok=True)
-
+pool = None
 
 async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
+    global pool
+    pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"))
+
+    async with pool.acquire() as conn:
+        await conn.execute("""
         CREATE TABLE IF NOT EXISTS guild_settings (
-            guild_id INTEGER PRIMARY KEY,
-            log_channel INTEGER,
-            ai_enabled INTEGER DEFAULT 0,
-            ai_strictness TEXT DEFAULT 'medium'
-        )
+            guild_id BIGINT PRIMARY KEY,
+            log_channel BIGINT,
+            ai_enabled BOOLEAN DEFAULT TRUE,
+            ai_strictness INTEGER DEFAULT 1
+        );
         """)
 
-        await db.execute("""
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            guild_id BIGINT,
+            user_id BIGINT,
+            reputation INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        """)
+
+        await conn.execute("""
         CREATE TABLE IF NOT EXISTS infractions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            guild_id INTEGER,
-            user_id INTEGER,
-            moderator_id INTEGER,
+            id SERIAL PRIMARY KEY,
+            guild_id BIGINT,
+            user_id BIGINT,
+            moderator_id BIGINT,
             action TEXT,
             reason TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
+            severity INTEGER,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
         """)
 
-        await db.commit()
+
+async def add_infraction(guild_id, user_id, moderator_id, action, reason, severity):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+        INSERT INTO infractions
+        (guild_id, user_id, moderator_id, action, reason, severity)
+        VALUES ($1,$2,$3,$4,$5,$6);
+        """, guild_id, user_id, moderator_id, action, reason, severity)
 
 
-async def save_guild_settings(guild_id, log_channel):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        INSERT OR REPLACE INTO guild_settings (guild_id, log_channel)
-        VALUES (?, ?)
-        """, (guild_id, log_channel))
-        await db.commit()
+async def get_user_reputation(guild_id, user_id):
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+        SELECT reputation FROM users
+        WHERE guild_id=$1 AND user_id=$2;
+        """, guild_id, user_id)
+        return row["reputation"] if row else 0
 
 
-async def get_guild_settings(guild_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT * FROM guild_settings WHERE guild_id = ?",
-            (guild_id,)
-        ) as cursor:
-            return await cursor.fetchone()
+async def set_user_reputation(guild_id, user_id, value):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+        INSERT INTO users (guild_id, user_id, reputation)
+        VALUES ($1,$2,$3)
+        ON CONFLICT (guild_id, user_id)
+        DO UPDATE SET reputation=$3;
+        """, guild_id, user_id, value)
 
 
-async def toggle_ai(guild_id, state):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        UPDATE guild_settings SET ai_enabled = ?
-        WHERE guild_id = ?
-        """, (state, guild_id))
-        await db.commit()
-
-
-async def set_ai_strictness(guild_id, level):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        UPDATE guild_settings SET ai_strictness = ?
-        WHERE guild_id = ?
-        """, (level, guild_id))
-        await db.commit()
-
-
-async def add_infraction(guild_id, user_id, moderator_id, action, reason):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        INSERT INTO infractions (guild_id, user_id, moderator_id, action, reason)
-        VALUES (?, ?, ?, ?, ?)
-        """, (guild_id, user_id, moderator_id, action, reason))
-        await db.commit()
-
-
-async def get_infractions(guild_id, user_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-        SELECT action, reason, timestamp
-        FROM infractions
-        WHERE guild_id = ? AND user_id = ?
-        ORDER BY id DESC
-        """, (guild_id, user_id)) as cursor:
-            return await cursor.fetchall()
+async def get_user_infractions(guild_id, user_id):
+    async with pool.acquire() as conn:
+        return await conn.fetch("""
+        SELECT * FROM infractions
+        WHERE guild_id=$1 AND user_id=$2
+        ORDER BY created_at DESC;
+        """, guild_id, user_id)
