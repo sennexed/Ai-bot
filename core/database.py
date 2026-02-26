@@ -140,3 +140,49 @@ async def log_join(guild_id, user_id):
         INSERT INTO join_logs (guild_id, user_id)
         VALUES ($1,$2);
         """, guild_id, user_id)
+
+# ----------------------------
+# GUILD SETTINGS
+# ----------------------------
+async def set_log_channel(guild_id, channel_id):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+        INSERT INTO guild_settings (guild_id, log_channel)
+        VALUES ($1,$2)
+        ON CONFLICT (guild_id)
+        DO UPDATE SET log_channel=$2;
+        """, guild_id, channel_id)
+
+
+async def get_log_channel(guild_id):
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+        SELECT log_channel FROM guild_settings
+        WHERE guild_id=$1;
+        """, guild_id)
+        return row["log_channel"] if row else None
+
+
+async def toggle_ai(guild_id):
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+        SELECT ai_enabled FROM guild_settings
+        WHERE guild_id=$1;
+        """, guild_id)
+
+        if not row:
+            await conn.execute("""
+            INSERT INTO guild_settings (guild_id, ai_enabled)
+            VALUES ($1, FALSE);
+            """, guild_id)
+            return False
+
+        new_value = not row["ai_enabled"]
+
+        await conn.execute("""
+        UPDATE guild_settings
+        SET ai_enabled=$2
+        WHERE guild_id=$1;
+        """, guild_id, new_value)
+
+        return new_value
