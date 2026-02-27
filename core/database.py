@@ -14,7 +14,11 @@ async def init_db():
             guild_id BIGINT PRIMARY KEY,
             log_channel BIGINT,
             ai_enabled BOOLEAN DEFAULT TRUE,
-            ai_strictness INTEGER DEFAULT 3
+            ai_strictness INTEGER DEFAULT 3,
+            raid_mode BOOLEAN DEFAULT FALSE,
+            lockdown BOOLEAN DEFAULT FALSE,
+            antispam BOOLEAN DEFAULT TRUE,
+            antilink BOOLEAN DEFAULT TRUE
         );
         """)
 
@@ -32,7 +36,6 @@ async def init_db():
         );
         """)
 
-
 async def ensure_guild(guild_id):
     async with pool.acquire() as conn:
         await conn.execute("""
@@ -41,54 +44,29 @@ async def ensure_guild(guild_id):
         ON CONFLICT (guild_id) DO NOTHING;
         """, guild_id)
 
-
-async def set_log_channel(guild_id, channel_id):
-    await ensure_guild(guild_id)
-    async with pool.acquire() as conn:
-        await conn.execute("""
-        UPDATE guild_settings
-        SET log_channel=$1
-        WHERE guild_id=$2;
-        """, channel_id, guild_id)
-
-
-async def get_log_channel(guild_id):
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("""
-        SELECT log_channel FROM guild_settings
-        WHERE guild_id=$1;
-        """, guild_id)
-        return row["log_channel"] if row else None
-
-
 async def get_guild_settings(guild_id):
     async with pool.acquire() as conn:
         return await conn.fetchrow("""
         SELECT * FROM guild_settings WHERE guild_id=$1;
         """, guild_id)
 
-
-async def toggle_ai(guild_id):
+async def toggle_setting(guild_id, field):
     await ensure_guild(guild_id)
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(f"""
+        UPDATE guild_settings
+        SET {field} = NOT {field}
+        WHERE guild_id=$1
+        RETURNING {field};
+        """, guild_id)
+        return row[field]
+
+async def get_log_channel(guild_id):
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
-        UPDATE guild_settings
-        SET ai_enabled = NOT ai_enabled
-        WHERE guild_id=$1
-        RETURNING ai_enabled;
+        SELECT log_channel FROM guild_settings WHERE guild_id=$1;
         """, guild_id)
-        return row["ai_enabled"]
-
-
-async def set_strictness(guild_id, level):
-    await ensure_guild(guild_id)
-    async with pool.acquire() as conn:
-        await conn.execute("""
-        UPDATE guild_settings
-        SET ai_strictness=$1
-        WHERE guild_id=$2;
-        """, level, guild_id)
-
+        return row["log_channel"] if row else None
 
 async def add_infraction(guild_id, user_id, moderator_id, action, reason, severity, explanation):
     async with pool.acquire() as conn:
@@ -97,12 +75,3 @@ async def add_infraction(guild_id, user_id, moderator_id, action, reason, severi
         (guild_id, user_id, moderator_id, action, reason, severity, explanation)
         VALUES ($1,$2,$3,$4,$5,$6,$7);
         """, guild_id, user_id, moderator_id, action, reason, severity, explanation)
-
-
-async def count_user_infractions(guild_id, user_id):
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("""
-        SELECT COUNT(*) FROM infractions
-        WHERE guild_id=$1 AND user_id=$2;
-        """, guild_id, user_id)
-        return row["count"]
