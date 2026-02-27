@@ -119,7 +119,16 @@ async def get_context(guild_id, user_id):
         ORDER BY created_at ASC;
         """, guild_id, user_id)
         return " ".join([r["content"] for r in rows])
+# =========================
+# SINGLE CASE FETCH
+# =========================
 
+async def get_case(case_id):
+    async with pool.acquire() as conn:
+        return await conn.fetchrow("""
+        SELECT * FROM infractions
+        WHERE id=$1;
+        """, case_id)
 # =========================
 # INFRACTIONS
 # =========================
