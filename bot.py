@@ -5,26 +5,78 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from core.database import init_db
 
-load_dotenv()
+# =========================
+# LOAD ENV
+# =========================
 
-intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents)
+load_dotenv()
+TOKEN = os.getenv("DISCORD_TOKEN")
+
+if not TOKEN:
+    raise RuntimeError("DISCORD_TOKEN not found in environment variables.")
+
+# =========================
+# INTENTS
+# =========================
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+intents.guilds = True
+
+# =========================
+# BOT SETUP
+# =========================
+
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents
+)
+
+# =========================
+# LOAD COGS
+# =========================
+
+COGS = [
+    "cogs.moderation",
+    "cogs.management",
+    "cogs.security",
+    "cogs.info",
+    "cogs.staff"
+]
 
 async def load_cogs():
-    await bot.load_extension("cogs.management")
-    await bot.load_extension("cogs.moderation")
-    await bot.load_extension("cogs.security")
-    await bot.load_extension("cogs.info")
+    for cog in COGS:
+        try:
+            await bot.load_extension(cog)
+            print(f"Loaded {cog}")
+        except Exception as e:
+            print(f"Failed to load {cog}: {e}")
+
+# =========================
+# READY EVENT
+# =========================
 
 @bot.event
 async def on_ready():
-    await init_db()
-    await bot.tree.sync()
-    print(f"Bot ready as {bot.user}")
+    print(f"Logged in as {bot.user}")
+
+    try:
+        await bot.tree.sync()
+        print("Slash commands synced globally.")
+    except Exception as e:
+        print(f"Slash sync failed: {e}")
+
+# =========================
+# STARTUP
+# =========================
 
 async def main():
+    await init_db()  # Initialize Postgres before bot starts
+
     async with bot:
         await load_cogs()
-        await bot.start(os.getenv("DISCORD_TOKEN"))
+        await bot.start(TOKEN)
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
