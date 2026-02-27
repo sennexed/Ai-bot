@@ -4,7 +4,7 @@ import asyncpg
 pool = None
 
 # =========================
-# INITIALIZE DATABASE
+# INIT
 # =========================
 
 async def init_db():
@@ -71,6 +71,13 @@ async def ensure_guild(guild_id):
         INSERT INTO guild_settings (guild_id)
         VALUES ($1)
         ON CONFLICT (guild_id) DO NOTHING;
+        """, guild_id)
+
+async def get_guild_settings(guild_id):
+    async with pool.acquire() as conn:
+        return await conn.fetchrow("""
+        SELECT * FROM guild_settings
+        WHERE guild_id=$1;
         """, guild_id)
 
 async def set_log_channel(guild_id, channel_id):
