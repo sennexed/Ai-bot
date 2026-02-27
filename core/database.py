@@ -36,6 +36,17 @@ async def init_db():
         );
         """)
 
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS reputation (
+            guild_id BIGINT,
+            user_id BIGINT,
+            score INTEGER DEFAULT 100,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        """)
+
+# ---------------- SETTINGS ----------------
+
 async def ensure_guild(guild_id):
     async with pool.acquire() as conn:
         await conn.execute("""
@@ -68,6 +79,8 @@ async def get_log_channel(guild_id):
         """, guild_id)
         return row["log_channel"] if row else None
 
+# ---------------- INFRACTIONS ----------------
+
 async def add_infraction(guild_id, user_id, moderator_id, action, reason, severity, explanation):
     async with pool.acquire() as conn:
         await conn.execute("""
@@ -75,3 +88,56 @@ async def add_infraction(guild_id, user_id, moderator_id, action, reason, severi
         (guild_id, user_id, moderator_id, action, reason, severity, explanation)
         VALUES ($1,$2,$3,$4,$5,$6,$7);
         """, guild_id, user_id, moderator_id, action, reason, severity, explanation)
+
+    await decrease_reputation(guild_id, user_id, severity)
+
+async def count_user_infractions(guild_id, user_id):
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+        SELECT COUNT(*) FROM infractions
+        WHERE guild_id=$1 AND user_id=$2;
+        """, guild_id, user_id)
+        return row["count"]
+
+async def get_user_cases(guild_id, user_id):
+    async with pool.acquire() as conn:
+        return await conn.fetch("""
+        SELECT * FROM infractions
+        WHERE guild_id=$1 AND user_id=$2
+        ORDER BY created_at DESC
+        LIMIT 10;
+        """, guild_id, user_id)
+
+# ---------------- REPUTATION ----------------
+
+async def decrease_reputation(guild_id, user_id, severity):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+        INSERT INTO reputation (guild_id, user_id, score)
+        VALUES ($1,$2,100)
+        ON CONFLICT (guild_id, user_id) DO NOTHING;
+        """, guild_id, user_id)
+
+        await conn.execute("""
+        UPDATE reputation
+        SET score = score - $1
+        WHERE guild_id=$2 AND user_id=$3;
+        """, severity // 5, guild_id, user_id)
+
+async def get_reputation(guild_id, user_id):
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+        SELECT score FROM reputation
+        WHERE guild_id=$1 AND user_id=$2;
+        """, guild_id, user_id)
+        return row["score"] if row else 100
+
+async def get_top_risk(guild_id):
+    async with pool.acquire() as conn:
+        return await conn.fetch("""
+        SELECT user_id, score
+        FROM reputation
+        WHERE guild_id=$1
+        ORDER BY score ASC
+        LIMIT 5;
+        """, guild_id)
