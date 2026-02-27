@@ -45,59 +45,37 @@ async def init_db():
         );
         """)
 
-# ---------------- SETTINGS ----------------
-
-async def ensure_guild(guild_id):
-    async with pool.acquire() as conn:
         await conn.execute("""
-        INSERT INTO guild_settings (guild_id)
-        VALUES ($1)
-        ON CONFLICT (guild_id) DO NOTHING;
-        """, guild_id)
-
-async def get_guild_settings(guild_id):
-    async with pool.acquire() as conn:
-        return await conn.fetchrow("""
-        SELECT * FROM guild_settings WHERE guild_id=$1;
-        """, guild_id)
-
-async def toggle_setting(guild_id, field):
-    await ensure_guild(guild_id)
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(f"""
-        UPDATE guild_settings
-        SET {field} = NOT {field}
-        WHERE guild_id=$1
-        RETURNING {field};
-        """, guild_id)
-        return row[field]
-
-async def get_log_channel(guild_id):
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("""
-        SELECT log_channel FROM guild_settings WHERE guild_id=$1;
-        """, guild_id)
-        return row["log_channel"] if row else None
+        CREATE TABLE IF NOT EXISTS appeals (
+            id SERIAL PRIMARY KEY,
+            guild_id BIGINT,
+            case_id INTEGER,
+            user_id BIGINT,
+            reason TEXT,
+            status TEXT DEFAULT 'PENDING',
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+        """)
 
 # ---------------- INFRACTIONS ----------------
 
 async def add_infraction(guild_id, user_id, moderator_id, action, reason, severity, explanation):
     async with pool.acquire() as conn:
-        await conn.execute("""
+        row = await conn.fetchrow("""
         INSERT INTO infractions
         (guild_id, user_id, moderator_id, action, reason, severity, explanation)
-        VALUES ($1,$2,$3,$4,$5,$6,$7);
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        RETURNING id;
         """, guild_id, user_id, moderator_id, action, reason, severity, explanation)
 
     await decrease_reputation(guild_id, user_id, severity)
+    return row["id"]
 
-async def count_user_infractions(guild_id, user_id):
+async def get_case(case_id):
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("""
-        SELECT COUNT(*) FROM infractions
-        WHERE guild_id=$1 AND user_id=$2;
-        """, guild_id, user_id)
-        return row["count"]
+        return await conn.fetchrow("""
+        SELECT * FROM infractions WHERE id=$1;
+        """, case_id)
 
 async def get_user_cases(guild_id, user_id):
     async with pool.acquire() as conn:
@@ -107,6 +85,14 @@ async def get_user_cases(guild_id, user_id):
         ORDER BY created_at DESC
         LIMIT 10;
         """, guild_id, user_id)
+
+async def count_user_infractions(guild_id, user_id):
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+        SELECT COUNT(*) FROM infractions
+        WHERE guild_id=$1 AND user_id=$2;
+        """, guild_id, user_id)
+        return row["count"]
 
 # ---------------- REPUTATION ----------------
 
@@ -132,12 +118,18 @@ async def get_reputation(guild_id, user_id):
         """, guild_id, user_id)
         return row["score"] if row else 100
 
-async def get_top_risk(guild_id):
+# ---------------- APPEALS ----------------
+
+async def create_appeal(guild_id, case_id, user_id, reason):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+        INSERT INTO appeals (guild_id, case_id, user_id, reason)
+        VALUES ($1,$2,$3,$4);
+        """, guild_id, case_id, user_id, reason)
+
+async def get_appeals(guild_id):
     async with pool.acquire() as conn:
         return await conn.fetch("""
-        SELECT user_id, score
-        FROM reputation
-        WHERE guild_id=$1
-        ORDER BY score ASC
-        LIMIT 5;
+        SELECT * FROM appeals
+        WHERE guild_id=$1 AND status='PENDING';
         """, guild_id)

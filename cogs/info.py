@@ -1,29 +1,45 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-from core.database import get_user_cases, get_reputation, get_top_risk
+from core.database import (
+    get_user_cases,
+    get_reputation,
+    get_case,
+    create_appeal
+)
 
 class Info(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="cases", description="View user's last 10 cases")
-    async def cases(self, interaction: discord.Interaction, user: discord.Member):
-        cases = await get_user_cases(interaction.guild.id, user.id)
+    @app_commands.command(name="case", description="View specific case")
+    async def case(self, interaction: discord.Interaction, case_id: int):
+        case = await get_case(case_id)
 
-        if not cases:
-            await interaction.response.send_message("No cases found.", ephemeral=True)
+        if not case:
+            await interaction.response.send_message("Case not found.", ephemeral=True)
             return
 
-        embed = discord.Embed(title=f"Cases for {user}")
-        for case in cases:
-            embed.add_field(
-                name=f"{case['action']} | Severity {case['severity']}",
-                value=case["explanation"],
-                inline=False
-            )
+        embed = discord.Embed(title=f"Case #{case_id}")
+        embed.add_field(name="Action", value=case["action"])
+        embed.add_field(name="Severity", value=case["severity"])
+        embed.add_field(name="Reason", value=case["explanation"], inline=False)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="appeal", description="Appeal a case")
+    async def appeal(self, interaction: discord.Interaction, case_id: int, reason: str):
+        await create_appeal(
+            interaction.guild.id,
+            case_id,
+            interaction.user.id,
+            reason
+        )
+
+        await interaction.response.send_message(
+            "Appeal submitted to moderators.",
+            ephemeral=True
+        )
 
     @app_commands.command(name="risk", description="Check user risk level")
     async def risk(self, interaction: discord.Interaction, user: discord.Member):
@@ -32,23 +48,6 @@ class Info(commands.Cog):
             f"{user.mention} Reputation Score: {score}",
             ephemeral=True
         )
-
-    @app_commands.command(name="analytics", description="View server risk analytics")
-    async def analytics(self, interaction: discord.Interaction):
-        top = await get_top_risk(interaction.guild.id)
-
-        embed = discord.Embed(title="Top Risk Users")
-
-        for entry in top:
-            member = interaction.guild.get_member(entry["user_id"])
-            if member:
-                embed.add_field(
-                    name=member.name,
-                    value=f"Score: {entry['score']}",
-                    inline=False
-                )
-
-        await interaction.response.send_message(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(Info(bot))
