@@ -1,145 +1,166 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+from utils.ai import analyze_message
 from core.database import (
-    set_log_channel,
+    add_infraction,
+    count_user_infractions,
     get_log_channel,
-    add_infraction
+    get_guild_settings,
+    log_staff_action,
+    pool
 )
 
-# ================= MAIN PANEL =================
+class Moderation(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
 
-class MainPanel(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
+    # =========================================
+    # AUTO AI MODERATION LISTENER
+    # =========================================
 
-    @discord.ui.button(label="Moderation", style=discord.ButtonStyle.primary, custom_id="panel_mod")
-    async def mod(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            embed=discord.Embed(title="Moderation Panel"),
-            view=ModerationPanel(),
-            ephemeral=True
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+
+        if not message.guild:
+            return
+
+        if message.author.bot:
+            return
+
+        # Fetch AI status
+        settings = await get_guild_settings(message.guild.id)
+        if not settings or not settings["ai_enabled"]:
+            return
+
+        result = await analyze_message(message.content)
+        if not result:
+            return
+
+        severity = int(result.get("severity", 0))
+        action = result.get("action", "none")
+        confidence = float(result.get("confidence", 0))
+        explanation = result.get("explanation", "No explanation")
+
+        if severity < 40:
+            return  # Ignore low severity
+
+        # Store infraction
+        case_id = await add_infraction(
+            message.guild.id,
+            message.author.id,
+            self.bot.user.id,
+            action.upper(),
+            explanation,
+            severity,
+            confidence,
+            explanation
         )
 
+        # Count infractions for escalation
+        count = await count_user_infractions(
+            message.guild.id,
+            message.author.id
+        )
 
-# ================= MOD PANEL =================
+        # Escalation logic
+        try:
+            if count >= 5:
+                await message.guild.ban(
+                    message.author,
+                    reason="AI escalation: repeated violations"
+                )
+                final_action = "BAN"
 
-class ModerationPanel(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
+            elif count >= 3:
+                await message.author.timeout(
+                    discord.utils.utcnow() + discord.timedelta(minutes=10),
+                    reason="AI escalation timeout"
+                )
+                final_action = "TIMEOUT"
 
-    @discord.ui.button(label="Warn", style=discord.ButtonStyle.secondary, custom_id="warn_btn")
-    async def warn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(WarnModal())
+            else:
+                await message.delete()
+                final_action = "WARN"
 
-    @discord.ui.button(label="Kick", style=discord.ButtonStyle.secondary, custom_id="kick_btn")
-    async def kick(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(KickModal())
+        except Exception:
+            final_action = "FAILED"
 
-    @discord.ui.button(label="Ban", style=discord.ButtonStyle.danger, custom_id="ban_btn")
-    async def ban(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(BanModal())
+        # Log embed
+        log_channel_id = await get_log_channel(message.guild.id)
+        if log_channel_id:
+            channel = message.guild.get_channel(log_channel_id)
+            if channel:
+                embed = discord.Embed(
+                    title=f"AI Moderation Case #{case_id}",
+                    color=discord.Color.red()
+                )
+                embed.add_field(name="User", value=message.author.mention)
+                embed.add_field(name="Severity", value=str(severity))
+                embed.add_field(name="Confidence", value=str(confidence))
+                embed.add_field(name="Action", value=final_action)
+                embed.add_field(name="Explanation", value=explanation, inline=False)
+                await channel.send(embed=embed)
 
+    # =========================================
+    # MANUAL COMMANDS
+    # =========================================
 
-# ================= MODALS =================
+    @app_commands.command(name="warn", description="Warn a user manually")
+    async def warn(self, interaction: discord.Interaction,
+                   member: discord.Member,
+                   reason: str):
 
-class WarnModal(discord.ui.Modal, title="Warn User"):
-    user = discord.ui.TextInput(label="User ID")
-    reason = discord.ui.TextInput(label="Reason")
-
-    async def on_submit(self, interaction: discord.Interaction):
-        member = await interaction.guild.fetch_member(int(self.user.value))
         await add_infraction(
             interaction.guild.id,
             member.id,
             interaction.user.id,
             "WARN",
-            self.reason.value,
-            0,
-            self.reason.value
+            reason,
+            50,
+            1.0,
+            "Manual moderation"
         )
 
-        try:
-            await member.send(f"You were warned: {self.reason.value}")
-        except:
-            pass
+        await log_staff_action(
+            interaction.guild.id,
+            interaction.user.id,
+            "WARN",
+            None
+        )
 
-        log_channel_id = await get_log_channel(interaction.guild.id)
-        if log_channel_id:
-            channel = interaction.guild.get_channel(log_channel_id)
-            await channel.send(
-                embed=discord.Embed(
-                    title="User Warned",
-                    description=f"{member.mention}\nReason: {self.reason.value}"
-                )
+        await interaction.response.send_message(
+            f"{member.mention} has been warned."
+        )
+
+    @app_commands.command(name="cases", description="View user cases")
+    async def cases(self, interaction: discord.Interaction,
+                    member: discord.Member):
+
+        from core.database import get_user_cases
+        records = await get_user_cases(
+            interaction.guild.id,
+            member.id
+        )
+
+        if not records:
+            return await interaction.response.send_message(
+                "No cases found."
             )
 
-        await interaction.response.send_message("Warned successfully.", ephemeral=True)
-
-
-class KickModal(discord.ui.Modal, title="Kick User"):
-    user = discord.ui.TextInput(label="User ID")
-    reason = discord.ui.TextInput(label="Reason")
-
-    async def on_submit(self, interaction: discord.Interaction):
-        member = await interaction.guild.fetch_member(int(self.user.value))
-        await member.kick(reason=self.reason.value)
-
-        await add_infraction(
-            interaction.guild.id,
-            member.id,
-            interaction.user.id,
-            "KICK",
-            self.reason.value,
-            0,
-            self.reason.value
+        embed = discord.Embed(
+            title=f"Cases for {member}",
+            color=discord.Color.orange()
         )
 
-        await interaction.response.send_message("Kicked successfully.", ephemeral=True)
+        for r in records[:5]:
+            embed.add_field(
+                name=f"Case #{r['id']} - {r['action']}",
+                value=r["reason"],
+                inline=False
+            )
 
-
-class BanModal(discord.ui.Modal, title="Ban User"):
-    user = discord.ui.TextInput(label="User ID")
-    reason = discord.ui.TextInput(label="Reason")
-
-    async def on_submit(self, interaction: discord.Interaction):
-        member = await interaction.guild.fetch_member(int(self.user.value))
-        await member.ban(reason=self.reason.value)
-
-        await add_infraction(
-            interaction.guild.id,
-            member.id,
-            interaction.user.id,
-            "BAN",
-            self.reason.value,
-            0,
-            self.reason.value
-        )
-
-        await interaction.response.send_message("Banned successfully.", ephemeral=True)
-
-
-# ================= COG =================
-
-class Moderation(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        bot.add_view(MainPanel())
-        bot.add_view(ModerationPanel())
-
-    @app_commands.command(name="setup", description="Set log channel")
-    async def setup(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Admin only.", ephemeral=True)
-            return
-
-        await set_log_channel(interaction.guild.id, channel.id)
-        await interaction.response.send_message("Log channel set.", ephemeral=True)
-
-    @app_commands.command(name="panel", description="Open control panel")
-    async def panel(self, interaction: discord.Interaction):
-        embed = discord.Embed(title="Control Panel")
-        await interaction.response.send_message(embed=embed, view=MainPanel())
+        await interaction.response.send_message(embed=embed)
 
 
 async def setup(bot):
